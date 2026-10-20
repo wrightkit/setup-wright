@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exact Wright release the smoke jobs install. Bump deliberately.
+  WRIGHT_SMOKE_VERSION: 0.29.0
+
+jobs:
+  lint:
+    name: actionlint and shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The image bundles shellcheck, so actionlint also checks `run:` scripts.
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh
+
+  test:
+    name: Helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Test the helper script
+        run: scripts/test-setup-wright.sh
+
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Wright through the Action
+        id: first
+        uses: ./
+        with:
+          version: ${{ env.WRIGHT_SMOKE_VERSION }}
+
+      - name: Move the installed copy aside so the cache must restore it
+        shell: bash
+        run: mv "$RUNNER_TEMP/setup-wright" "$RUNNER_TEMP/setup-wright-first"
+
+      - name: Install Wright again from the cache
+        id: second
+        uses: ./
+        with:
+          version: ${{ env.WRIGHT_SMOKE_VERSION }}
+
+      # A fork PR has a read-only cache token, so it cannot seed the cache.
+      - name: Check the second install used the cache
+        if: github.event.pull_request.head.repo.fork != true
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.second.outputs.cache-hit }}
+        run: |
+          [[ "$CACHE_HIT" == true ]] || { echo "::error::expected a cache hit"; exit 1; }
+
+      - name: Check the installed version
+        shell: bash
+        run: |
+          wright --version | tee "$RUNNER_TEMP/version.txt"
+          grep -Fq "$WRIGHT_SMOKE_VERSION" "$RUNNER_TEMP/version.txt"
+
+      - name: Run Wright as an ordinary step
+        shell: bash
+        run: |
+          printf 'rule ("setup smoke") {\n    event {\n        Ongoing - Global;\n    }\n    actions {\n        Disable Inspector Recording;\n    }\n}\n' > "$RUNNER_TEMP/smoke.ws"
+          wright check "$RUNNER_TEMP/smoke.ws"
+          grep -Fq 'PASS' "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,37 @@
+name: Release
+
+# release-please maintains the Release PR. Merging it creates the exact vX.Y.Z
+# tag and GitHub Release. The same job then moves the major tag (for example
+# v1) to that tag, so consumers can use `wrightkit/setup-wright@v1`. The
+# built-in token suffices: no downstream workflow starts from these tags.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Move the major tag
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAJOR_TAG: v${{ steps.release.outputs.major }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$MAJOR_TAG" -f sha="$SHA" -F force=true || gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$MAJOR_TAG" -f sha="$SHA"

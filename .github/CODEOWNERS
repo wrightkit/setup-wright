@@ -1,0 +1,4 @@
+# CI, release workflows, and the Action contract define what passes and what publishes.
+/.github/ @Teakowa
+/action.yml @Teakowa
+/AGENTS.md @Teakowa
